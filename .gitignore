@@ -1,0 +1,5 @@
+project_pandemic_empty/extensionBoardLib.cylib/*
+project_pandemic_empty/pandemic.cydsn/*
+!**/main.c
+!**/pandemic.c
+!**/pandemic.h
