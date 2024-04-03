@@ -28,7 +28,7 @@
 #define CONTAMINATION_TASK_NAME ("contamination_task")
 
 #define GAME_PRIORITY (20)
-#define CONTAMINATION_PRIORITY (15)
+#define CONTAMINATION_PRIORITY (19)
 #define CLUES_PRIORITY (10)
 #define MEDICINE_PRIORITY (9)
 #define DISPLAY_PRIORITY (1)
@@ -231,7 +231,7 @@ void displayTask(void* args){
 }
 
 /*
-*   
+*   Whenever the semaphore is realesed, put the population into quarantine.
 */
 void contaminationTask(void* args){
     for (;;){
