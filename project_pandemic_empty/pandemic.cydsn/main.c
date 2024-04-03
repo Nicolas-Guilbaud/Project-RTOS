@@ -24,10 +24,15 @@
 #define GAME_TASK_NAME ("game_task")
 #define CLUES_TASK_NAME ("clues_task")
 #define MEDICINE_TASK_NAME ("medicine_task")
+#define DISPLAY_TASK_NAME ("display_task")
 
 #define GAME_PRIORITY (20)
 #define CLUES_PRIORITY (10)
 #define MEDICINE_PRIORITY (9)
+#define DISPLAY_PRIORITY (1)
+
+#define DISPLAY_PERIOD (50)             // in ms  
+#define DISPLAY_TICKS_PER_STATE (60)    // in periods of display (3s per state)
 
 /* Number of pills required in stock before allocating lab to vaccine */
 #define PILLS_REQUIRED (0)
@@ -45,14 +50,30 @@ SemaphoreHandle_t clueSync;
  */
 Token currentClue = 0;
 
+/*
+* Represents the current information being display in the LCD.
+*/
+typedef enum {
+    DISPLAY_POP,
+    DISPLAY_VAC,
+    DISPLAY_MED
+} DISPLAY_STATE;
+
+DISPLAY_STATE display_state = DISPLAY_POP;
+/* Counter that controls the time each state is displayed. 
+(No mutex because no critical section)*/
+uint8_t display_cntr = 0;
+
 /* Task functions */
-void cluesTask( void * args);
-void medicineTask( void * args);
+void cluesTask(void* args);
+void medicineTask(void* args);
+void displayTask(void* args);
 
 /* Task handlers */
 TaskHandle_t gameHandler;
 TaskHandle_t cluesHandler;
 TaskHandle_t medicineHandler;
+TaskHandle_t displayHandler;
 
 /*
  * Installs the RTOS interrupt handlers.
@@ -78,13 +99,12 @@ int main(void)
     xTaskCreate( gameTask, GAME_TASK_NAME, TASK_STACK_SIZE, NULL, GAME_PRIORITY, &gameHandler );
     xTaskCreate( cluesTask, CLUES_TASK_NAME, TASK_STACK_SIZE, NULL, CLUES_PRIORITY, &cluesHandler );
     xTaskCreate( medicineTask, MEDICINE_TASK_NAME, TASK_STACK_SIZE, NULL, MEDICINE_PRIORITY, &medicineHandler );
+    xTaskCreate( displayTask, DISPLAY_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_PRIORITY, &displayHandler );
     
     // Launch freeRTOS
     vTaskStartScheduler();     
     
-    for(;;)
-    {
-    }
+    for(;;){}
 }
 
 void freeRTOSInit( void )
@@ -122,7 +142,7 @@ void releaseClue( Token clue ){
 /*
  * Used to schedule vaccine production.
  */
-void cluesTask( void * args){
+void cluesTask(void *args){
 
     for(;;){
         xSemaphoreTake(clueSync, portMAX_DELAY); // Wait for a new clue
@@ -141,7 +161,7 @@ void cluesTask( void * args){
 /*
  * Used to schedule medicine production.
  */
-void medicineTask( void * args){
+void medicineTask(void *args){
     for(;;){
         // Assign the lab to the medicine production
         xSemaphoreTake(labMutex, portMAX_DELAY);
@@ -150,5 +170,52 @@ void medicineTask( void * args){
     }
 }
 
+void displayUpdateStatus(){
+    // STATE TRANSITION: POP -> VAC -> MED
+    // Every 60 ticks the state is changed
+   
+    if (display_cntr == DISPLAY_TICKS_PER_STATE){   
+        if (display_state == DISPLAY_POP){
+            display_state = DISPLAY_VAC;
+        }
+        else if (display_state == DISPLAY_VAC){
+            display_state = DISPLAY_MED;   
+        }
+        else{
+            display_state = DISPLAY_POP;   
+        }
+        display_cntr = 0; // reset of counter
+    }
+    else{   // If no transition, increment counter
+        display_cntr++;
+    }
+}
+
+/*
+*   Every 50ms, it displays one information of the left side of
+*   the LCD screen for 3s each.
+*/
+void displayTask(void* args){
+    for (;;){
+        displayUpdateStatus(); 
+        
+        LCD_Position(0u, 0u);
+        LCD_ClearDisplay();
+        if (display_state == DISPLAY_POP){
+            LCD_PrintString("POP: ");
+            LCD_PrintInt8(getPopulationCntr());
+        }
+        else if (display_state == DISPLAY_VAC){
+            LCD_PrintString("VAC: ");
+            LCD_PrintInt8(getVaccineCntr());
+        }
+        else{
+            LCD_PrintString("MED: ");
+            LCD_PrintInt8(getMedicineCntr());
+        }
+        // Logic to ensure periodicity
+        vTaskDelay(DISPLAY_PERIOD - (xTaskGetTickCount()%DISPLAY_PERIOD));
+    }
+}
 
 /* [] END OF FILE */
