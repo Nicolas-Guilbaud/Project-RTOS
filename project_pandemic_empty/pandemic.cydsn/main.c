@@ -131,9 +131,9 @@ void cluesTask( void * args){
         if(getMedicineCntr() < PILLS_REQUIRED) continue;
 
         // Assign the lab to the vaccine research
-        xSemaphoreTake(labSemaphore, portMAX_DELAY);
-        shipVaccine( assignMissionToLab(currentClue) );
-        xSemaphoreGive(labSemaphore);
+        xSemaphoreTake(labMutex, portMAX_DELAY);
+        shipVaccine(assignMissionToLab(currentClue));
+        xSemaphoreGive(labMutex);
     }
 
 }
@@ -144,9 +144,9 @@ void cluesTask( void * args){
 void medicineTask( void * args){
     for(;;){
         // Assign the lab to the medicine production
-        xSemaphoreTake(labSemaphore, portMAX_DELAY);
-        shipMedicine( assignMissionToLab(0) );
-        xSemaphoreGive(labSemaphore);
+        xSemaphoreTake(labMutex, portMAX_DELAY);
+        shipMedicine(assignMissionToLab(0));
+        xSemaphoreGive(labMutex);
     }
 }
 
