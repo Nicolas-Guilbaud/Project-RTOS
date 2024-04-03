@@ -25,8 +25,10 @@
 #define CLUES_TASK_NAME ("clues_task")
 #define MEDICINE_TASK_NAME ("medicine_task")
 #define DISPLAY_TASK_NAME ("display_task")
+#define CONTAMINATION_TASK_NAME ("contamination_task")
 
 #define GAME_PRIORITY (20)
+#define CONTAMINATION_PRIORITY (15)
 #define CLUES_PRIORITY (10)
 #define MEDICINE_PRIORITY (9)
 #define DISPLAY_PRIORITY (1)
@@ -44,6 +46,8 @@ SemaphoreHandle_t labMutex;
  * by the lab, invaliding the medicine research.
  */
 SemaphoreHandle_t clueSync;
+/* Semaphore to trigger contamination task action */
+SemaphoreHandle_t contaminationFlag;
 
 /* Represents the current active clue
  * It is a shared ressource without the need of a mutex (no critical section)
@@ -68,12 +72,14 @@ uint8_t display_cntr = 0;
 void cluesTask(void* args);
 void medicineTask(void* args);
 void displayTask(void* args);
+void contaminationTask(void* args);
 
 /* Task handlers */
 TaskHandle_t gameHandler;
 TaskHandle_t cluesHandler;
 TaskHandle_t medicineHandler;
 TaskHandle_t displayHandler;
+TaskHandle_t contaminationHandler;
 
 /*
  * Installs the RTOS interrupt handlers.
@@ -94,12 +100,14 @@ int main(void)
     /* Create mutexes */
     labMutex = xSemaphoreCreateMutex();
     clueSync = xSemaphoreCreateBinary();
+    contaminationFlag = xSemaphoreCreateBinary();
 
     // Create tasks
     xTaskCreate( gameTask, GAME_TASK_NAME, TASK_STACK_SIZE, NULL, GAME_PRIORITY, &gameHandler );
     xTaskCreate( cluesTask, CLUES_TASK_NAME, TASK_STACK_SIZE, NULL, CLUES_PRIORITY, &cluesHandler );
     xTaskCreate( medicineTask, MEDICINE_TASK_NAME, TASK_STACK_SIZE, NULL, MEDICINE_PRIORITY, &medicineHandler );
     xTaskCreate( displayTask, DISPLAY_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_PRIORITY, &displayHandler );
+    xTaskCreate( contaminationTask, CONTAMINATION_TASK_NAME, TASK_STACK_SIZE, NULL, CONTAMINATION_PRIORITY, &contaminationHandler );
     
     // Launch freeRTOS
     vTaskStartScheduler();     
@@ -126,7 +134,8 @@ void freeRTOSInit( void )
  * 
  */
 void releaseContamination( void ){
-    /* TODO Complete this */
+    // release the flag so contamination task can execute.
+    xSemaphoreGive(contaminationFlag);
 }
 
 /*
@@ -170,7 +179,10 @@ void medicineTask(void *args){
     }
 }
 
-void displayUpdateStatus(){
+/*
+*   Manages the display states
+*/
+void displayUpdateState(){
     // STATE TRANSITION: POP -> VAC -> MED
     // Every 60 ticks the state is changed
    
@@ -197,7 +209,7 @@ void displayUpdateStatus(){
 */
 void displayTask(void* args){
     for (;;){
-        displayUpdateStatus(); 
+        displayUpdateState(); 
         
         LCD_Position(0u, 0u);
         LCD_ClearDisplay();
@@ -218,4 +230,13 @@ void displayTask(void* args){
     }
 }
 
+/*
+*   
+*/
+void contaminationTask(void* args){
+    for (;;){
+        xSemaphoreTake(contaminationFlag, portMAX_DELAY);
+        quarantine();
+    }   
+}
 /* [] END OF FILE */
