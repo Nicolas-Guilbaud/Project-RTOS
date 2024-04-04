@@ -25,16 +25,18 @@
 #define CLUES_TASK_NAME ("clues_task")
 #define MEDICINE_TASK_NAME ("medicine_task")
 #define DISPLAY_TASK_NAME ("display_task")
+#define DISPLAY_STATE_TASK_NAME ("display_state_task")
 #define CONTAMINATION_TASK_NAME ("contamination_task")
 
 #define GAME_PRIORITY (20)
 #define CONTAMINATION_PRIORITY (19)
 #define CLUES_PRIORITY (10)
 #define MEDICINE_PRIORITY (9)
+#define DISPLAY_STATE_PRIORITY (2)
 #define DISPLAY_PRIORITY (1)
 
 #define DISPLAY_PERIOD (50)             // in ms  
-#define DISPLAY_TICKS_PER_STATE (60)    // in periods of display (3s per state)
+#define DISPLAY_STATE_PERIOD (3000)       // in periods of display (3s per state)
 
 /* Number of pills required in stock before allocating lab to vaccine */
 #define PILLS_REQUIRED (0)
@@ -64,14 +66,12 @@ typedef enum {
 } DISPLAY_STATE;
 
 DISPLAY_STATE display_state = DISPLAY_POP;
-/* Counter that controls the time each state is displayed. 
-(No mutex because no critical section)*/
-uint8_t display_cntr = 0;
 
 /* Task functions */
 void cluesTask(void* args);
 void medicineTask(void* args);
 void displayTask(void* args);
+void displayStateTask(void* args);
 void contaminationTask(void* args);
 
 /* Task handlers */
@@ -79,6 +79,7 @@ TaskHandle_t gameHandler;
 TaskHandle_t cluesHandler;
 TaskHandle_t medicineHandler;
 TaskHandle_t displayHandler;
+TaskHandle_t displayStateHandler;
 TaskHandle_t contaminationHandler;
 
 /*
@@ -107,6 +108,7 @@ int main(void)
     xTaskCreate( cluesTask, CLUES_TASK_NAME, TASK_STACK_SIZE, NULL, CLUES_PRIORITY, &cluesHandler );
     xTaskCreate( medicineTask, MEDICINE_TASK_NAME, TASK_STACK_SIZE, NULL, MEDICINE_PRIORITY, &medicineHandler );
     xTaskCreate( displayTask, DISPLAY_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_PRIORITY, &displayHandler );
+    xTaskCreate( displayStateTask, DISPLAY_STATE_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_STATE_PRIORITY, &displayStateHandler );
     xTaskCreate( contaminationTask, CONTAMINATION_TASK_NAME, TASK_STACK_SIZE, NULL, CONTAMINATION_PRIORITY, &contaminationHandler );
     
     // Launch freeRTOS
@@ -182,11 +184,11 @@ void medicineTask(void *args){
 /*
 *   Manages the display states
 */
-void displayUpdateState(){
+void displayStateTask(void* args){
     // STATE TRANSITION: POP -> VAC -> MED
-    // Every 60 ticks the state is changed
+    // Every 3s the state is changed
    
-    if (display_cntr == DISPLAY_TICKS_PER_STATE){   
+    for (;;){ 
         if (display_state == DISPLAY_POP){
             display_state = DISPLAY_VAC;
         }
@@ -196,10 +198,8 @@ void displayUpdateState(){
         else{
             display_state = DISPLAY_POP;   
         }
-        display_cntr = 0; // reset of counter
-    }
-    else{   // If no transition, increment counter
-        display_cntr++;
+        // Logic to ensure periodicity
+        vTaskDelay(DISPLAY_STATE_PERIOD - (xTaskGetTickCount() % DISPLAY_STATE_PERIOD));
     }
 }
 
@@ -209,8 +209,6 @@ void displayUpdateState(){
 */
 void displayTask(void* args){
     for (;;){
-        displayUpdateState(); 
-        
         LCD_Position(0u, 0u);
         LCD_ClearDisplay();
         if (display_state == DISPLAY_POP){
