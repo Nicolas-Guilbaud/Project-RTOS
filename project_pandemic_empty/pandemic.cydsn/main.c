@@ -28,50 +28,40 @@
 #define DISPLAY_STATE_TASK_NAME ("display_state_task")
 #define CONTAMINATION_TASK_NAME ("contamination_task")
 
-#define GAME_PRIORITY (20)
-#define CONTAMINATION_PRIORITY (19)
-#define CLUES_PRIORITY (10)
-#define MEDICINE_PRIORITY (9)
-#define DISPLAY_STATE_PRIORITY (2)
-#define DISPLAY_PRIORITY (1)
+/* Priorities */
+#define GAME_PRIORITY           (20)
+#define CONTAMINATION_PRIORITY  (19)
+#define CLUES_PRIORITY          (15)
+#define MEDICINE_PRIORITY       (10)
+#define DISPLAY_PRIORITY        (18)
 
-#define DISPLAY_PERIOD (50)             // in ms  
-#define DISPLAY_STATE_PERIOD (3000)       // in periods of display (3s per state)
+/* TASK PERIODS */
+#define DISPLAY_PERIOD          (500)         // in ms  
 
-/* Number of pills required in stock before allocating lab to vaccine */
-#define PILLS_REQUIRED (0)
+/* GPIOJ macro */
+#define READ(name) GPIOJ1##name##_##Read()
+#define WRITE(name,v) GPIOJ1##name##_##Write(v)
+
+/* Period correction to take into account potential tardiness */
+#define CORRECT_PERIOD(p) p - (xTaskGetTickCount()%p)
+
+/* Condition used to check if the game is still running */
+#define IS_GAME_RUNNING (getPopulationCntr() > 0 && getVaccineCntr() < 100)
 
 /* Mutex for lab, which is a shared resource*/
 SemaphoreHandle_t labMutex;
-/* Semaphore to synchronize the clue processing task with the release of the clue
- * Avoids the situation where a new clue is released before the previous one is processed
- * by the lab, invaliding the medicine research.
- */
-SemaphoreHandle_t clueSync;
 /* Semaphore to trigger contamination task action */
 SemaphoreHandle_t contaminationFlag;
 
-/* Represents the current active clue
- * It is a shared ressource without the need of a mutex (no critical section)
- */
-Token currentClue = 0;
-
-/*
-* Represents the current information being display in the LCD.
-*/
-typedef enum {
-    DISPLAY_POP,
-    DISPLAY_VAC,
-    DISPLAY_MED
-} DISPLAY_STATE;
-
-DISPLAY_STATE display_state = DISPLAY_POP;
+/* Queue used to pass the clue token */
+#define QUEUE_SIZE 1
+#define TOKEN_SIZE sizeof(Token)
+QueueHandle_t queue;
 
 /* Task functions */
 void cluesTask(void* args);
 void medicineTask(void* args);
 void displayTask(void* args);
-void displayStateTask(void* args);
 void contaminationTask(void* args);
 
 /* Task handlers */
@@ -79,7 +69,6 @@ TaskHandle_t gameHandler;
 TaskHandle_t cluesHandler;
 TaskHandle_t medicineHandler;
 TaskHandle_t displayHandler;
-TaskHandle_t displayStateHandler;
 TaskHandle_t contaminationHandler;
 
 /*
@@ -100,19 +89,19 @@ int main(void)
     
     /* Create mutexes */
     labMutex = xSemaphoreCreateMutex();
-    clueSync = xSemaphoreCreateBinary();
     contaminationFlag = xSemaphoreCreateBinary();
-
+    
     // Create tasks
     xTaskCreate( gameTask, GAME_TASK_NAME, TASK_STACK_SIZE, NULL, GAME_PRIORITY, &gameHandler );
     xTaskCreate( cluesTask, CLUES_TASK_NAME, TASK_STACK_SIZE, NULL, CLUES_PRIORITY, &cluesHandler );
     xTaskCreate( medicineTask, MEDICINE_TASK_NAME, TASK_STACK_SIZE, NULL, MEDICINE_PRIORITY, &medicineHandler );
     xTaskCreate( displayTask, DISPLAY_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_PRIORITY, &displayHandler );
-    xTaskCreate( displayStateTask, DISPLAY_STATE_TASK_NAME, TASK_STACK_SIZE, NULL, DISPLAY_STATE_PRIORITY, &displayStateHandler );
     xTaskCreate( contaminationTask, CONTAMINATION_TASK_NAME, TASK_STACK_SIZE, NULL, CONTAMINATION_PRIORITY, &contaminationHandler );
     
+    queue = xQueueCreate(QUEUE_SIZE,TOKEN_SIZE);  
+    
     // Launch freeRTOS
-    vTaskStartScheduler();     
+    vTaskStartScheduler();   
     
     for(;;){}
 }
@@ -145,8 +134,8 @@ void releaseContamination( void ){
  * 
  */
 void releaseClue( Token clue ){
-    currentClue = clue;
-    xSemaphoreGive(clueSync);
+    //Send clue to queue
+    xQueueSendToBack(queue,&clue,portMAX_DELAY);
 }
 
 
@@ -154,18 +143,28 @@ void releaseClue( Token clue ){
  * Used to schedule vaccine production.
  */
 void cluesTask(void *args){
+    
+    (void) args;
 
-    for(;;){
-        xSemaphoreTake(clueSync, portMAX_DELAY); // Wait for a new clue
+    while(IS_GAME_RUNNING){
         
-        //Check if there are enough pills to start vaccine production
-        if(getMedicineCntr() < PILLS_REQUIRED) continue;
-
-        // Assign the lab to the vaccine research
+        WRITE(3,1);
+        
+        Token clue;
+        
+        //Wait for a new clue
+        xQueueReceive(queue,&clue,portMAX_DELAY);
+        
+        //Use lab to produce vaccine
         xSemaphoreTake(labMutex, portMAX_DELAY);
-        shipVaccine(assignMissionToLab(currentClue));
+        Token res = assignMissionToLab(clue);
         xSemaphoreGive(labMutex);
+        
+        shipVaccine(res);
+        
+        WRITE(3,0);
     }
+    vTaskSuspend(cluesHandler);
 
 }
 
@@ -173,68 +172,74 @@ void cluesTask(void *args){
  * Used to schedule medicine production.
  */
 void medicineTask(void *args){
-    for(;;){
-        // Assign the lab to the medicine production
+    
+    (void) args;
+    
+    // Assign the lab to the medicine production
+    
+    while(IS_GAME_RUNNING){
+        
+        WRITE(2,1);
+        
+        //Use lab to produce medicine pills
         xSemaphoreTake(labMutex, portMAX_DELAY);
-        shipMedicine(assignMissionToLab(0));
+        Token res = assignMissionToLab(0);
         xSemaphoreGive(labMutex);
+        
+        shipMedicine(res);
+        
+        WRITE(2,0);
     }
-}
-
-/*
-*   Manages the display states
-*/
-void displayStateTask(void* args){
-    // STATE TRANSITION: POP -> VAC -> MED
-    // Every 3s the state is changed
-   
-    for (;;){ 
-        if (display_state == DISPLAY_POP){
-            display_state = DISPLAY_VAC;
-        }
-        else if (display_state == DISPLAY_VAC){
-            display_state = DISPLAY_MED;   
-        }
-        else{
-            display_state = DISPLAY_POP;   
-        }
-        // Logic to ensure periodicity
-        vTaskDelay(DISPLAY_STATE_PERIOD - (xTaskGetTickCount() % DISPLAY_STATE_PERIOD));
-    }
+    vTaskSuspend(medicineHandler);
 }
 
 /*
 *   Every 50ms, it displays one information of the left side of
-*   the LCD screen for 3s each.
+*   the LCD screen.
 */
 void displayTask(void* args){
-    for (;;){
-        LCD_Position(0u, 0u);
+    
+    (void) args;
+    while (IS_GAME_RUNNING){
+        
+        WRITE(1,1);
+        
+        //Getting values to print
+        uint8 pop = getPopulationCntr(),
+            vac = getVaccineCntr(),
+            med = getMedicineCntr();
+        
         LCD_ClearDisplay();
-        if (display_state == DISPLAY_POP){
-            LCD_PrintString("POP: ");
-            LCD_PrintInt8(getPopulationCntr());
-        }
-        else if (display_state == DISPLAY_VAC){
-            LCD_PrintString("VAC: ");
-            LCD_PrintInt8(getVaccineCntr());
-        }
-        else{
-            LCD_PrintString("MED: ");
-            LCD_PrintInt8(getMedicineCntr());
-        }
+        LCD_Position(0u, 0u);
+        
+        // Format: "pop vac med"
+        LCD_PrintDecUint16(pop);
+        LCD_PrintString(" ");
+        LCD_PrintDecUint16(vac);
+        LCD_PrintString(" ");
+        LCD_PrintDecUint16(med);
+        
+        
+        WRITE(1,0);
         // Logic to ensure periodicity
-        vTaskDelay(DISPLAY_PERIOD - (xTaskGetTickCount()%DISPLAY_PERIOD));
+        vTaskDelay(CORRECT_PERIOD(DISPLAY_PERIOD));
     }
+    vTaskSuspend(displayHandler);
 }
 
 /*
 *   Whenever the semaphore is realesed, put the population into quarantine.
 */
 void contaminationTask(void* args){
-    for (;;){
+    
+    (void) args;
+    while(IS_GAME_RUNNING){
+        WRITE(4,0);
         xSemaphoreTake(contaminationFlag, portMAX_DELAY);
+        WRITE(4,1);
         quarantine();
-    }   
+        
+    }
+    vTaskSuspend(contaminationHandler);
 }
 /* [] END OF FILE */
